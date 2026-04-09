@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -23,41 +24,62 @@ func main() {
 
 	fmt.Print("bits 16\n\n")
 
-	buf := make([]byte, 2)
-
 	for {
-		n, err := file.Read(buf)
+		buf := make([]byte, 1)
+		_, err := file.Read(buf)
 		if err == io.EOF {
 			break
 		}
 
-		if n != 2 {
-			log.Fatal("wrong file format")
-		}
-
 		b1 := buf[0]
-		b2 := buf[1]
-		var command string
 
-		opcode := b1 >> 2
-		// d
-		_ = (b1 >> 1) & 0b1
-		w := b1 & 0b1
+		command := "mov"
 
-		// mod
-		_ = (b2 >> 6) & 0b11
-		reg := (b2 >> 3) & 0b111
-		rm := b2 & 0b111
+		if b1>>2 == 0b100010 {
+			d := (b1 >> 1) & 0b1
+			w := b1 & 0b1
 
-		if opcode == 0b100010 {
-			command += "mov"
+			_, err := file.Read(buf)
+			if err == io.EOF {
+				break
+			}
+
+			b2 := buf[0]
+
+			mod := (b2 >> 6) & 0b11
+			reg := (b2 >> 3) & 0b111
+			rm := b2 & 0b111
+
+			rmText := getRM(rm, w, mod, file)
+			regText := getRegister(reg, w)
+
+			if d == 0b0 {
+				fmt.Printf("%s %s, %s\n", command, rmText, regText)
+			} else {
+				fmt.Printf("%s %s, %s\n", command, regText, rmText)
+			}
+		} else if b1>>4 == 0b1011 {
+			w := b1 >> 3 & 0b1
+			reg := b1 & 0b111
+
+			regText := getRegister(reg, w)
+
+			if w == 0b1 {
+				buf = make([]byte, 2)
+			}
+
+			_, err := file.Read(buf)
+			if err == io.EOF {
+				break
+			}
+
+			value := uint16(buf[0])
+			if w == 0b1 {
+				value = uint16(buf[1])<<8 | uint16(buf[0])
+			}
+
+			fmt.Printf("%s %s, %d\n", command, regText, value)
 		}
-
-		command += " " + getRegister(rm, w)
-		command += ", " + getRegister(reg, w)
-		command += "\n"
-
-		fmt.Print(command)
 	}
 }
 
@@ -65,9 +87,65 @@ func getRegister(reg byte, w byte) string {
 	regs8 := [...]string{"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"}
 	regs16 := [...]string{"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"}
 
-	if w == 0b0 {
+	if w == 0b1 {
 		return regs16[int(reg)]
 	}
 
 	return regs8[int(reg)]
+}
+
+func getRM(rm byte, w byte, mod byte, file io.ReadCloser) string {
+	if mod == 0b11 {
+		return getRegister(rm, w)
+	}
+
+	regs := [...]string{
+		"bx + si",
+		"bx + di",
+		"bp + si",
+		"bp + di",
+		"si",
+		"di",
+		"bp",
+		"bx",
+	}
+
+	bufSize := 1
+	reg := regs[int(rm)]
+
+	if mod == 0b00 {
+		if rm == 0b110 {
+			reg = ""
+		} else {
+			bufSize = 0
+		}
+	}
+
+	if mod == 0b10 {
+		bufSize = 2
+	}
+
+	value := uint16(0)
+
+	if bufSize != 0 {
+		buf := make([]byte, bufSize)
+		_, err := file.Read(buf)
+
+		if err == io.EOF {
+			log.Fatal("command is invalid")
+		}
+
+		value = uint16(buf[0])
+		if bufSize == 2 {
+			value = uint16(buf[1])<<8 | uint16(buf[0])
+		}
+	}
+
+	if value == 0 {
+		return strings.Trim(fmt.Sprintf("[%s]", reg), " ")
+	} else if reg == "" {
+		return strings.Trim(fmt.Sprintf("[%d]", value), " ")
+	}
+
+	return strings.Trim(fmt.Sprintf("[%s + %d]", reg, value), " ")
 }
