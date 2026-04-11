@@ -79,6 +79,61 @@ func main() {
 			}
 
 			fmt.Printf("%s %s, %d\n", command, regText, value)
+		} else if b1>>1 == 0b1100011 {
+			w := b1 & 0b1
+
+			buf := make([]byte, 1)
+			_, err := file.Read(buf)
+			if err == io.EOF {
+				break
+			}
+
+			b2 := buf[0]
+
+			mod := (b2 >> 6) & 0b11
+			rm := b2 & 0b111
+
+			rmText := getRM(rm, w, mod, file)
+
+			if w == 0b1 {
+				buf = make([]byte, 2)
+			}
+
+			_, err = file.Read(buf)
+			if err == io.EOF {
+				break
+			}
+
+			value := uint16(buf[0])
+			if w == 0b1 {
+				value = uint16(buf[1])<<8 | uint16(buf[0])
+			}
+
+			if w == 0b1 {
+				fmt.Printf("%s %s, word %d\n", command, rmText, value)
+			} else {
+				fmt.Printf("%s %s, byte %d\n", command, rmText, value)
+			}
+		} else if b1>>1 == 0b1010000 || b1>>1 == 0b1010001 {
+			w := b1 & 0b1
+			p := b1 >> 1 & 0b1
+
+			buf := make([]byte, 2)
+			_, err := file.Read(buf)
+			if err == io.EOF {
+				break
+			}
+
+			value := uint16(buf[0])
+			if w == 0b1 {
+				value = uint16(buf[1])<<8 | uint16(buf[0])
+			}
+
+			if p == 0b1 {
+				fmt.Printf("%s [%d], ax\n", command, value)
+			} else {
+				fmt.Printf("%s ax,[%d]\n", command, value)
+			}
 		}
 	}
 }
@@ -115,6 +170,7 @@ func getRM(rm byte, w byte, mod byte, file io.ReadCloser) string {
 
 	if mod == 0b00 {
 		if rm == 0b110 {
+			bufSize = 2
 			reg = ""
 		} else {
 			bufSize = 0
@@ -125,7 +181,7 @@ func getRM(rm byte, w byte, mod byte, file io.ReadCloser) string {
 		bufSize = 2
 	}
 
-	value := uint16(0)
+	intValue := int16(0)
 
 	if bufSize != 0 {
 		buf := make([]byte, bufSize)
@@ -135,17 +191,22 @@ func getRM(rm byte, w byte, mod byte, file io.ReadCloser) string {
 			log.Fatal("command is invalid")
 		}
 
-		value = uint16(buf[0])
+		intValue = int16(int8(buf[0]))
+
 		if bufSize == 2 {
-			value = uint16(buf[1])<<8 | uint16(buf[0])
+			intValue = int16(uint16(buf[1])<<8 | uint16(buf[0]))
 		}
 	}
 
-	if value == 0 {
+	if intValue == 0 {
 		return strings.Trim(fmt.Sprintf("[%s]", reg), " ")
 	} else if reg == "" {
-		return strings.Trim(fmt.Sprintf("[%d]", value), " ")
+		return strings.Trim(fmt.Sprintf("[%d]", intValue), " ")
 	}
 
-	return strings.Trim(fmt.Sprintf("[%s + %d]", reg, value), " ")
+	if intValue > 0 {
+		return strings.Trim(fmt.Sprintf("[%s + %d]", reg, intValue), " ")
+	} else {
+		return strings.Trim(fmt.Sprintf("[%s - %d]", reg, -intValue), " ")
+	}
 }
