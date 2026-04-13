@@ -5,137 +5,138 @@ import (
 	"io"
 	"log"
 	"os"
-	"strings"
 )
 
-func main() {
-	args := os.Args
-	if len(args) < 2 {
-		log.Fatal("Please set source the file")
-	}
-	name := args[1]
+type instr struct {
+	mask   byte
+	value  byte
+	name   string
+	decode func(b byte, file io.ReadCloser) (string, error)
+}
 
-	file, err := os.Open(name)
+var instructions = []instr{
+	{0b11111100, 0b10001000, "mov", regMemDecode},
+	{0b11110000, 0b10110000, "mov", immRegDecode},
+	{0b11111100, 0b11000110, "mov", immRegMemDecode},
+	{0b11111100, 0b10100000, "mov", accumDecode},
+	{0b11111100, 0b10100010, "mov", accumDecode},
+}
+
+func getNumber(data []byte) uint16 {
+	if len(data) == 2 {
+		return uint16(data[1])<<8 | uint16(data[0])
+	}
+
+	return uint16(data[0])
+}
+
+func regMemDecode(b byte, file io.ReadCloser) (string, error) {
+	d := (b >> 1) & 0b1
+	w := b & 0b1
+
+	buf := make([]byte, 1)
+
+	_, err := file.Read(buf)
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 
-	defer file.Close()
+	b2 := buf[0]
 
-	fmt.Print("bits 16\n\n")
+	mod := (b2 >> 6) & 0b11
+	reg := (b2 >> 3) & 0b111
+	rm := b2 & 0b111
 
-	for {
-		buf := make([]byte, 1)
-		_, err := file.Read(buf)
-		if err == io.EOF {
-			break
-		}
+	rmText := getRM(rm, w, mod, file)
+	regText := getRegister(reg, w)
+	command := ""
 
-		b1 := buf[0]
-
-		command := "mov"
-
-		if b1>>2 == 0b100010 {
-			d := (b1 >> 1) & 0b1
-			w := b1 & 0b1
-
-			_, err := file.Read(buf)
-			if err == io.EOF {
-				break
-			}
-
-			b2 := buf[0]
-
-			mod := (b2 >> 6) & 0b11
-			reg := (b2 >> 3) & 0b111
-			rm := b2 & 0b111
-
-			rmText := getRM(rm, w, mod, file)
-			regText := getRegister(reg, w)
-
-			if d == 0b0 {
-				fmt.Printf("%s %s, %s\n", command, rmText, regText)
-			} else {
-				fmt.Printf("%s %s, %s\n", command, regText, rmText)
-			}
-		} else if b1>>4 == 0b1011 {
-			w := b1 >> 3 & 0b1
-			reg := b1 & 0b111
-
-			regText := getRegister(reg, w)
-
-			if w == 0b1 {
-				buf = make([]byte, 2)
-			}
-
-			_, err := file.Read(buf)
-			if err == io.EOF {
-				break
-			}
-
-			value := uint16(buf[0])
-			if w == 0b1 {
-				value = uint16(buf[1])<<8 | uint16(buf[0])
-			}
-
-			fmt.Printf("%s %s, %d\n", command, regText, value)
-		} else if b1>>1 == 0b1100011 {
-			w := b1 & 0b1
-
-			buf := make([]byte, 1)
-			_, err := file.Read(buf)
-			if err == io.EOF {
-				break
-			}
-
-			b2 := buf[0]
-
-			mod := (b2 >> 6) & 0b11
-			rm := b2 & 0b111
-
-			rmText := getRM(rm, w, mod, file)
-
-			if w == 0b1 {
-				buf = make([]byte, 2)
-			}
-
-			_, err = file.Read(buf)
-			if err == io.EOF {
-				break
-			}
-
-			value := uint16(buf[0])
-			if w == 0b1 {
-				value = uint16(buf[1])<<8 | uint16(buf[0])
-			}
-
-			if w == 0b1 {
-				fmt.Printf("%s %s, word %d\n", command, rmText, value)
-			} else {
-				fmt.Printf("%s %s, byte %d\n", command, rmText, value)
-			}
-		} else if b1>>1 == 0b1010000 || b1>>1 == 0b1010001 {
-			w := b1 & 0b1
-			p := b1 >> 1 & 0b1
-
-			buf := make([]byte, 2)
-			_, err := file.Read(buf)
-			if err == io.EOF {
-				break
-			}
-
-			value := uint16(buf[0])
-			if w == 0b1 {
-				value = uint16(buf[1])<<8 | uint16(buf[0])
-			}
-
-			if p == 0b1 {
-				fmt.Printf("%s [%d], ax\n", command, value)
-			} else {
-				fmt.Printf("%s ax,[%d]\n", command, value)
-			}
-		}
+	if d == 0b0 {
+		command = fmt.Sprintf("%s, %s\n", rmText, regText)
+	} else {
+		command = fmt.Sprintf("%s, %s\n", regText, rmText)
 	}
+
+	return command, nil
+}
+
+func immRegMemDecode(b byte, file io.ReadCloser) (string, error) {
+	w := b & 0b1
+
+	buf := make([]byte, 1)
+	_, err := file.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	b2 := buf[0]
+
+	mod := (b2 >> 6) & 0b11
+	rm := b2 & 0b111
+
+	rmText := getRM(rm, w, mod, file)
+
+	if w == 0b1 {
+		buf = make([]byte, 2)
+	}
+
+	_, err = file.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	value := getNumber(buf)
+	command := ""
+
+	if w == 0b1 {
+		command = fmt.Sprintf("%s, word %d\n", rmText, value)
+	} else {
+		command = fmt.Sprintf("%s, byte %d\n", rmText, value)
+	}
+
+	return command, nil
+}
+
+func immRegDecode(b byte, file io.ReadCloser) (string, error) {
+	w := b >> 3 & 0b1
+	reg := b & 0b111
+
+	regText := getRegister(reg, w)
+	buf := make([]byte, 1)
+
+	if w == 0b1 {
+		buf = make([]byte, 2)
+	}
+
+	_, err := file.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	value := getNumber(buf)
+
+	return fmt.Sprintf("%s, %d\n", regText, value), nil
+}
+
+func accumDecode(b byte, file io.ReadCloser) (string, error) {
+	p := b >> 1 & 0b1
+
+	buf := make([]byte, 2)
+	_, err := file.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	value := getNumber(buf)
+	command := ""
+
+	if p == 0b1 {
+		command = fmt.Sprintf("[%d], ax\n", value)
+	} else {
+		command = fmt.Sprintf("ax,[%d]\n", value)
+	}
+
+	return command, err
 }
 
 func getRegister(reg byte, w byte) string {
@@ -165,20 +166,19 @@ func getRM(rm byte, w byte, mod byte, file io.ReadCloser) string {
 		"bx",
 	}
 
-	bufSize := 1
+	bufSize := 2
 	reg := regs[int(rm)]
 
 	if mod == 0b00 {
 		if rm == 0b110 {
-			bufSize = 2
 			reg = ""
 		} else {
 			bufSize = 0
 		}
 	}
 
-	if mod == 0b10 {
-		bufSize = 2
+	if mod == 0b01 {
+		bufSize = 1
 	}
 
 	intValue := int16(0)
@@ -199,14 +199,58 @@ func getRM(rm byte, w byte, mod byte, file io.ReadCloser) string {
 	}
 
 	if intValue == 0 {
-		return strings.Trim(fmt.Sprintf("[%s]", reg), " ")
+		return fmt.Sprintf("[%s]", reg)
 	} else if reg == "" {
-		return strings.Trim(fmt.Sprintf("[%d]", intValue), " ")
+		return fmt.Sprintf("[%d]", intValue)
 	}
 
 	if intValue > 0 {
-		return strings.Trim(fmt.Sprintf("[%s + %d]", reg, intValue), " ")
+		return fmt.Sprintf("[%s + %d]", reg, intValue)
 	} else {
-		return strings.Trim(fmt.Sprintf("[%s - %d]", reg, -intValue), " ")
+		return fmt.Sprintf("[%s - %d]", reg, -intValue)
+	}
+}
+
+func main() {
+	args := os.Args
+	if len(args) < 2 {
+		log.Fatal("Please set source the file")
+	}
+
+	name := args[1]
+
+	file, err := os.Open(name)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer file.Close()
+
+	fmt.Print("bits 16\n\n")
+
+	for {
+		buf := make([]byte, 1)
+		_, err := file.Read(buf)
+		if err == io.EOF {
+			break
+		}
+
+		b1 := buf[0]
+
+		for _, instruction := range instructions {
+			if b1&instruction.mask == instruction.value {
+				command, err := instruction.decode(b1, file)
+
+				if err == io.EOF {
+					break
+				}
+
+				if err != nil {
+					fmt.Println(err)
+				}
+
+				fmt.Printf("%s %s", instruction.name, command)
+			}
+		}
 	}
 }
