@@ -27,6 +27,34 @@ var instructions = []instr{
 	{0b11111100, 0b00101100, "sub", accumDecode},
 	{0b11111100, 0b00111000, "cmp", regMemDecode},
 	{0b11111100, 0b00111100, "cmp", accumDecode},
+	{mask: 0b11110000, value: 0b01110000, name: "none", decode: jumpDecode},
+	{mask: 0b11111100, value: 0b11100000, name: "none", decode: loopDecode},
+}
+
+var jccTable = [...]string{
+	"jo",  // 0000
+	"jno", // 0001
+	"jb",  // 0010
+	"jnb", // 0011
+	"je",  // 0100
+	"jne", // 0101
+	"jbe", // 0110
+	"ja",  // 0111
+	"js",  // 1000
+	"jns", // 1001
+	"jp",  // 1010
+	"jnp", // 1011
+	"jl",  // 1100
+	"jge", // 1101
+	"jle", // 1110
+	"jg",  // 1111
+}
+
+var loopTable = map[byte]string{
+	0b11100000: "loopne",
+	0b11100001: "loope",
+	0b11100010: "loop",
+	0b11100011: "jcxz",
 }
 
 func getNumber(data []byte, signed bool) int {
@@ -40,6 +68,37 @@ func getNumber(data []byte, signed bool) int {
 	}
 
 	return int(int16(i))
+}
+
+func jumpDecode(b byte, file io.ReadCloser) (string, error) {
+	cond := b & 0b1111
+	name := jccTable[cond]
+
+	buf := make([]byte, 1)
+
+	_, err := file.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	disp := int8(buf[0])
+
+	return fmt.Sprintf("%s %d\n", name, disp), nil
+}
+
+func loopDecode(b byte, file io.ReadCloser) (string, error) {
+	name := loopTable[b]
+
+	buf := make([]byte, 1)
+
+	_, err := file.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	disp := int8(buf[0])
+
+	return fmt.Sprintf("%s %d\n", name, disp), nil
 }
 
 func regMemDecode(b byte, file io.ReadCloser) (string, error) {
