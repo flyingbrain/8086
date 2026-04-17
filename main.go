@@ -16,7 +16,7 @@ type instr struct {
 
 var instructions = []instr{
 	{0b11111100, 0b10001000, "mov", regMemDecode},
-	{0b11111100, 0b11000110, "mov", immRegMemDecode},
+	{0b11111110, 0b11000110, "mov", immMovRegMemDecode},
 	{0b11110000, 0b10110000, "mov", immRegDecode},
 	{0b11111100, 0b10100000, "mov", accumDecode},
 	{0b11111100, 0b10100010, "mov", accumDecode},
@@ -58,16 +58,26 @@ var loopTable = map[byte]string{
 }
 
 func getNumber(data []byte, signed bool) int {
-	i := uint16(data[0])
+	var u uint16
+
+	if len(data) == 1 {
+		u = uint16(data[0])
+		if signed {
+			return int(int8(u)) // correct sign for 1 byte
+		}
+		return int(u)
+	}
+
 	if len(data) == 2 {
-		i = uint16(data[1])<<8 | uint16(data[0])
+		u = uint16(data[1])<<8 | uint16(data[0]) // little endian
+
+		if signed {
+			return int(int16(u)) // correct sign for 2 bytes
+		}
+		return int(u)
 	}
 
-	if signed {
-		return int(i)
-	}
-
-	return int(int16(i))
+	panic("unsupported size")
 }
 
 func jumpDecode(b byte, file io.ReadCloser) (string, error) {
@@ -131,6 +141,44 @@ func regMemDecode(b byte, file io.ReadCloser) (string, error) {
 	return command, nil
 }
 
+func immMovRegMemDecode(b byte, file io.ReadCloser) (string, error) {
+	w := b & 0b1
+
+	buf := make([]byte, 1)
+	_, err := file.Read(buf)
+
+	if err != nil {
+		return "", err
+	}
+
+	b2 := buf[0]
+
+	mod := (b2 >> 6) & 0b11
+	rm := b2 & 0b111
+
+	rmText := getRM(rm, w, mod, file)
+
+	if w == 0b1 {
+		buf = make([]byte, 2)
+	}
+
+	_, err = file.Read(buf)
+	if err != nil {
+		return "", err
+	}
+
+	value := getNumber(buf, true)
+	command := ""
+
+	if w == 0b1 {
+		command = fmt.Sprintf("%s, word %d\n", rmText, value)
+	} else {
+		command = fmt.Sprintf("%s, byte %d\n", rmText, value)
+	}
+
+	return command, nil
+}
+
 func immRegMemDecode(b byte, file io.ReadCloser) (string, error) {
 	commands := make([]string, 8)
 	commands[0] = "add "
@@ -152,6 +200,8 @@ func immRegMemDecode(b byte, file io.ReadCloser) (string, error) {
 	opt := b2 >> 3 & 0b111
 	rm := b2 & 0b111
 
+	command := commands[uint8(opt)]
+
 	rmText := getRM(rm, w, mod, file)
 
 	if s|w == 0b11 {
@@ -164,7 +214,6 @@ func immRegMemDecode(b byte, file io.ReadCloser) (string, error) {
 	}
 
 	value := getNumber(buf, s == 0b1)
-	command := commands[uint8(opt)]
 
 	if w == 0b1 {
 		command += fmt.Sprintf("%s, word %d\n", rmText, value)
@@ -199,23 +248,30 @@ func immRegDecode(b byte, file io.ReadCloser) (string, error) {
 func accumDecode(b byte, file io.ReadCloser) (string, error) {
 	w := b & 0b1
 	p := b >> 1 & 0b1
+	size := 1
+	if w == 0b1 {
+		size = 2
+	}
 
-	buf := make([]byte, 2)
+	buf := make([]byte, size)
 	_, err := file.Read(buf)
 	if err != nil {
 		return "", err
 	}
 
+	reg := "al"
 	value := getNumber(buf[:1], false)
 	if w == 0b1 {
 		value = getNumber(buf, false)
+		reg = "ax"
 	}
+
 	command := ""
 
 	if p == 0b1 {
-		command = fmt.Sprintf("[%d], ax\n", value)
+		command = fmt.Sprintf("[%d], %s\n", value, reg)
 	} else {
-		command = fmt.Sprintf("ax,[%d]\n", value)
+		command = fmt.Sprintf("%s,[%d]\n", reg, value)
 	}
 
 	return command, err
@@ -273,7 +329,7 @@ func getRM(rm byte, w byte, mod byte, file io.ReadCloser) string {
 			log.Fatal("command is invalid")
 		}
 
-		intValue = getNumber(buf, false)
+		intValue = getNumber(buf, true)
 	}
 
 	if intValue == 0 {
