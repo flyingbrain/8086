@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 )
 
 type OperationType string
@@ -15,20 +14,30 @@ const (
 	RelImmOp OperationType = "RelImm"
 )
 
-type operation struct {
-	opType OperationType
-	value  register
-}
-
-type decodedCommand struct {
-	optcode string
-	value   [2]operation
+type modOperand struct {
+	base  effectiveAddressBase
+	value uint16
+	reg   registerIndex
 }
 
 type register struct {
 	reg  registerIndex
 	h    int8
 	size int8
+}
+
+type operand interface {
+	printO() string
+}
+
+type operation struct {
+	opType OperationType
+	value  operand
+}
+
+type decodedCommand struct {
+	optcode string
+	value   [2]operation
 }
 
 func getReg(b byte, w int) operation {
@@ -46,6 +55,39 @@ func getReg(b byte, w int) operation {
 	rez := operation{}
 	rez.opType = RegOp
 	rez.value = RegTable[int(b)][w]
+
+	return rez
+}
+
+func getModName(b byte) effectiveAddressBase {
+
+	tab := []effectiveAddressBase{
+		EffectiveAddress_bx_si,
+		EffectiveAddress_bx_di,
+		EffectiveAddress_bp_si,
+		EffectiveAddress_bp_di,
+		EffectiveAddress_si,
+		EffectiveAddress_di,
+		EffectiveAddress_bp,
+		EffectiveAddress_bx,
+	}
+
+	return tab[b]
+}
+
+func parceDispl(data []byte, pos *int, needed bool, w bool) uint16 {
+	if !needed {
+		return 0
+	}
+
+	p := *pos / 8
+	rez := uint16(data[p])
+	*pos += 8
+
+	if w {
+		rez = uint16(rez)<<8 | uint16(data[p+1])
+		*pos += 8
+	}
 
 	return rez
 }
@@ -98,19 +140,36 @@ func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) {
 		panic(fmt.Sprintf("Commad decode wrong position:%d", *pos))
 	}
 
-	D, isD := f[dType]
-	W, isW := f[wType]
-	//MOD, isMOD := f[modType]
+	D := f[dType]
+	W := f[wType]
+	MOD := f[modType]
+	rm := f[rmType]
+
+	directAddr := MOD == 0b00 && rm == 0b110
+	hasDispl := MOD == 0b10 || MOD == 0b01 || directAddr
+	DisplW := directAddr || MOD == 0b10
+
+	dispData := parceDispl(buf, pos, hasDispl, DisplW)
 
 	if _, ok := f[regType]; ok {
-		if isD && isW {
-			command.value[boolToInt(D == 0)] = getReg(f[regType], int(W))
-		}
+		command.value[boolToInt(D == 0)] = getReg(f[regType], int(W))
 	}
 
 	if _, ok := f[rmType]; ok {
-		if isD && isW {
+		if MOD == 0b11 {
 			command.value[D] = getReg(f[rmType], int(W))
+		} else {
+			m := modOperand{
+				base:  getModName(f[rmType]),
+				value: dispData,
+				reg:   Register_none,
+			}
+
+			op := operation{
+				opType: MemOP,
+				value:  m,
+			}
+			command.value[D] = op
 		}
 	}
 
@@ -122,193 +181,4 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-func regMemDecode(b byte, file io.ReadCloser) (string, error) {
-	d := (b >> 1) & 0b1
-	w := b & 0b1
-
-	buf := make([]byte, 1)
-
-	_, err := file.Read(buf)
-	if err != nil {
-		return "", err
-	}
-
-	b2 := buf[0]
-
-	mod := (b2 >> 6) & 0b11
-	reg := (b2 >> 3) & 0b111
-	rm := b2 & 0b111
-
-	rmText := getRM(rm, w, mod, file)
-	regText := getRegister(reg, w)
-	command := ""
-
-	if d == 0b0 {
-		command = fmt.Sprintf("%s, %s\n", rmText, regText)
-	} else {
-		command = fmt.Sprintf("%s, %s\n", regText, rmText)
-	}
-
-	return command, nil
-}
-
-func immMovRegMemDecode(b byte, file io.ReadCloser) (string, error) {
-	w := b & 0b1
-
-	buf := make([]byte, 1)
-	_, err := file.Read(buf)
-
-	if err != nil {
-		return "", err
-	}
-
-	b2 := buf[0]
-
-	mod := (b2 >> 6) & 0b11
-	rm := b2 & 0b111
-
-	rmText := getRM(rm, w, mod, file)
-
-	if w == 0b1 {
-		buf = make([]byte, 2)
-	}
-
-	_, err = file.Read(buf)
-	if err != nil {
-		return "", err
-	}
-
-	value := getNumber(buf, true)
-	command := ""
-
-	if w == 0b1 {
-		command = fmt.Sprintf("%s, word %d\n", rmText, value)
-	} else {
-		command = fmt.Sprintf("%s, byte %d\n", rmText, value)
-	}
-
-	return command, nil
-}
-
-func immRegMemDecode(b byte, file io.ReadCloser) (string, error) {
-	commands := make([]string, 8)
-	commands[0] = "add "
-	commands[5] = "sub "
-	commands[7] = "cmp "
-
-	w := b & 0b1
-	s := b >> 1 & 0b1
-
-	buf := make([]byte, 1)
-	_, err := file.Read(buf)
-	if err != nil {
-		return "", err
-	}
-
-	b2 := buf[0]
-
-	mod := (b2 >> 6) & 0b11
-	opt := b2 >> 3 & 0b111
-	rm := b2 & 0b111
-
-	command := commands[uint8(opt)]
-
-	rmText := getRM(rm, w, mod, file)
-
-	if s|w == 0b11 {
-		buf = make([]byte, 2)
-	}
-
-	_, err = file.Read(buf)
-	if err != nil {
-		return "", err
-	}
-
-	value := getNumber(buf, s == 0b1)
-
-	if w == 0b1 {
-		command += fmt.Sprintf("%s, word %d\n", rmText, value)
-	} else {
-		command += fmt.Sprintf("%s, byte %d\n", rmText, value)
-	}
-
-	return command, nil
-}
-
-func immRegDecode(b byte, file io.ReadCloser) (string, error) {
-	w := b >> 3 & 0b1
-	reg := b & 0b111
-
-	regText := getRegister(reg, w)
-	buf := make([]byte, 1)
-
-	if w == 0b1 {
-		buf = make([]byte, 2)
-	}
-
-	_, err := file.Read(buf)
-	if err != nil {
-		return "", err
-	}
-
-	value := getNumber(buf, false)
-
-	return fmt.Sprintf("%s, %d\n", regText, value), nil
-}
-
-func accumDecode(b byte, file io.ReadCloser) (string, error) {
-	w := b & 0b1
-	p := b >> 1 & 0b1
-	size := 1
-	if w == 0b1 {
-		size = 2
-	}
-
-	buf := make([]byte, size)
-	_, err := file.Read(buf)
-	if err != nil {
-		return "", err
-	}
-
-	reg := "al"
-	value := getNumber(buf[:1], false)
-	if w == 0b1 {
-		value = getNumber(buf, false)
-		reg = "ax"
-	}
-
-	command := ""
-
-	if p == 0b1 {
-		command = fmt.Sprintf("[%d], %s\n", value, reg)
-	} else {
-		command = fmt.Sprintf("%s,[%d]\n", reg, value)
-	}
-
-	return command, err
-}
-
-func getNumber(data []byte, signed bool) int {
-	var u uint16
-
-	if len(data) == 1 {
-		u = uint16(data[0])
-		if signed {
-			return int(int8(u)) // correct sign for 1 byte
-		}
-		return int(u)
-	}
-
-	if len(data) == 2 {
-		u = uint16(data[1])<<8 | uint16(data[0]) // little endian
-
-		if signed {
-			return int(int16(u)) // correct sign for 2 bytes
-		}
-		return int(u)
-	}
-
-	panic("unsupported size")
 }

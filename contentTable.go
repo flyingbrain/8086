@@ -3,12 +3,13 @@ package main
 type DataType string
 
 const (
-	Literal DataType = "Literal"
-	wType   DataType = "W"
-	dType   DataType = "D"
-	regType DataType = "REG"
-	modType DataType = "MOD"
-	rmType  DataType = "RM"
+	Literal  DataType = "Literal"
+	wType    DataType = "W"
+	dType    DataType = "D"
+	regType  DataType = "REG"
+	modType  DataType = "MOD"
+	rmType   DataType = "RM"
+	dispType DataType = "Displ"
 )
 
 type Field struct {

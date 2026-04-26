@@ -84,31 +84,40 @@ func printCommand(data []decodedCommand) {
 	var str strings.Builder
 
 	for _, com := range data {
+
 		fmt.Fprintf(&str, "%s ", com.optcode)
 		sep := ", "
+
 		for _, c := range com.value {
-			if c.opType == RegOp {
-				fmt.Fprintf(&str, "%s%s", printReg(c), sep)
-				sep = ""
-			}
+			fmt.Fprintf(&str, "%s%s", c.value.printO(), sep)
+			sep = ""
 		}
+
 		str.WriteString("\n")
 	}
 
 	fmt.Print(str.String())
 }
 
-func printReg(o operation) string {
+func (o modOperand) printO() string {
+	if o.value != 0 {
+		return fmt.Sprintf("[%s + %d]", o.base, o.value)
+	}
+
+	return fmt.Sprintf("%s", o.base)
+}
+
+func (o register) printO() string {
 	c := ""
-	if o.value.size == 2 && len(o.value.reg) == 1 {
+	if o.size == 2 && len(o.reg) == 1 {
 		c = "x"
-	} else if o.value.size == 1 {
-		if o.value.h == 1 {
+	} else if o.size == 1 {
+		if o.h == 1 {
 			c = "h"
 		} else {
 			c = "l"
 		}
 	}
 
-	return string(o.value.reg) + c
+	return string(o.reg) + c
 }
