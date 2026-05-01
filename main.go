@@ -89,7 +89,7 @@ func printCommand(data []decodedCommand) {
 		sep := ", "
 
 		for _, c := range com.value {
-			fmt.Fprintf(&str, "%s%s", c.value.printO(), sep)
+			fmt.Fprintf(&str, "%s%s", c.value.printOp(), sep)
 			sep = ""
 		}
 
@@ -99,7 +99,7 @@ func printCommand(data []decodedCommand) {
 	fmt.Print(str.String())
 }
 
-func (o modOperand) printO() string {
+func (o modOperand) printOp() string {
 	if o.value != 0 {
 		return fmt.Sprintf("[%s + %d]", o.base, o.value)
 	}
@@ -107,7 +107,11 @@ func (o modOperand) printO() string {
 	return fmt.Sprintf("%s", o.base)
 }
 
-func (o register) printO() string {
+func (o directOperand) printOp() string {
+	return fmt.Sprintf("%d", o.value)
+}
+
+func (o register) printOp() string {
 	c := ""
 	if o.size == 2 && len(o.reg) == 1 {
 		c = "x"

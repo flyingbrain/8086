@@ -4,20 +4,14 @@ import (
 	"fmt"
 )
 
-type OperationType string
-
-const (
-	NoneOp   OperationType = "None"
-	RegOp    OperationType = "Reg"
-	MemOP    OperationType = "Mem"
-	ImmOp    OperationType = "Imm"
-	RelImmOp OperationType = "RelImm"
-)
-
 type modOperand struct {
 	base  effectiveAddressBase
 	value uint16
 	reg   registerIndex
+}
+
+type directOperand struct {
+	value int
 }
 
 type register struct {
@@ -27,12 +21,11 @@ type register struct {
 }
 
 type operand interface {
-	printO() string
+	printOp() string
 }
 
 type operation struct {
-	opType OperationType
-	value  operand
+	value operand
 }
 
 type decodedCommand struct {
@@ -53,7 +46,6 @@ func getReg(b byte, w int) operation {
 	}
 
 	rez := operation{}
-	rez.opType = RegOp
 	rez.value = RegTable[int(b)][w]
 
 	return rez
@@ -94,23 +86,29 @@ func parceDispl(data []byte, pos *int, needed bool, w bool) uint16 {
 
 func decode(buf []byte) ([]decodedCommand, error) {
 	cmds := []decodedCommand{}
-	for {
+
+	for len(buf) > 0 {
+		matched := false
 		pos := 0
-		if len(buf) == 0 {
-			break
-		}
 
 		for _, command := range Commands {
-			readCommand(buf, command, &cmds, &pos)
-			buf = buf[pos/8:]
+			if readCommand(buf, command, &cmds, &pos) {
+				matched = true
+				buf = buf[pos/8:]
+				break
+			}
+		}
+
+		if !matched {
+			fmt.Printf("can not transalate instruction %08b, trying next byte\n", buf[0])
+			buf = buf[1:]
 		}
 
 	}
 	return cmds, nil
 }
 
-// TODO add data if nesessary
-func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) {
+func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) bool {
 	command := decodedCommand{
 		optcode: com.Name,
 		value:   [2]operation{},
@@ -128,10 +126,14 @@ func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) {
 
 		b := buf[n]
 		if *pos == 0 && b>>(8-c.Width) != c.Value {
-			break
+			return false
 		}
 
-		f[c.Name] = (b << p) >> (8 - int(c.Width))
+		if c.HasValue {
+			f[c.Name] = c.Value
+		} else {
+			f[c.Name] = (b << p) >> (8 - int(c.Width))
+		}
 
 		*pos += int(c.Width)
 	}
@@ -144,36 +146,69 @@ func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) {
 	W := f[wType]
 	MOD := f[modType]
 	rm := f[rmType]
+	disp := f[dispType]
 
 	directAddr := MOD == 0b00 && rm == 0b110
-	hasDispl := MOD == 0b10 || MOD == 0b01 || directAddr
-	DisplW := directAddr || MOD == 0b10
+	hasDispl := MOD == 0b10 || MOD == 0b01 || directAddr || disp != 0
+	DisplW := directAddr || MOD == 0b10 || W != 0 && disp != 0
 
 	dispData := parceDispl(buf, pos, hasDispl, DisplW)
 
+	_, isData := f[dataType]
+	hasData := isData
+	dataW := W != 0
+
+	// REG
 	if _, ok := f[regType]; ok {
 		command.value[boolToInt(D == 0)] = getReg(f[regType], int(W))
 	}
 
+	// RM
 	if _, ok := f[rmType]; ok {
 		if MOD == 0b11 {
 			command.value[D] = getReg(f[rmType], int(W))
 		} else {
+
+			modName := getModName(f[rmType])
+			if directAddr {
+				modName = EffectiveAddress_direct
+			}
+
 			m := modOperand{
-				base:  getModName(f[rmType]),
+				base:  modName,
 				value: dispData,
 				reg:   Register_none,
 			}
 
 			op := operation{
-				opType: MemOP,
-				value:  m,
+				value: m,
 			}
+
 			command.value[D] = op
 		}
 	}
 
+	// direct data
+	if hasData {
+		data := parceDispl(buf, pos, hasData, dataW)
+		dataOper := directOperand{
+			value: int(data),
+		}
+
+		op := operation{}
+
+		idx := 0
+		if command.value[0] != op {
+			idx = 1
+		}
+
+		op.value = dataOper
+
+		command.value[idx] = op
+	}
+
 	*cmds = append(*cmds, command)
+	return true
 }
 
 func boolToInt(b bool) int {
