@@ -63,7 +63,7 @@ func main() {
 
 	defer file.Close()
 
-	buf := make([]byte, 1024)
+	buf := make([]byte, 2048)
 
 	n, err := file.Read(buf)
 	if err == io.EOF {
@@ -86,10 +86,21 @@ func printCommand(data []decodedCommand) {
 	for _, com := range data {
 
 		fmt.Fprintf(&str, "%s ", com.optcode)
+		if com.amb && com.comType != jump {
+			size := "byte"
+			if com.w {
+				size = "word"
+			}
+
+			fmt.Fprintf(&str, "%s ", size)
+		}
+
 		sep := ", "
 
 		for _, c := range com.value {
-			fmt.Fprintf(&str, "%s%s", c.value.printOp(), sep)
+			if c.value != nil {
+				fmt.Fprintf(&str, "%s%s", c.value.printOp(), sep)
+			}
 			sep = ""
 		}
 
@@ -101,7 +112,15 @@ func printCommand(data []decodedCommand) {
 
 func (o modOperand) printOp() string {
 	if o.value != 0 {
-		return fmt.Sprintf("[%s + %d]", o.base, o.value)
+		if o.base == "" {
+			return fmt.Sprintf("[%d]", o.value)
+		}
+
+		if o.value > 0 {
+			return fmt.Sprintf("[%s + %d]", o.base, o.value)
+		}
+
+		return fmt.Sprintf("[%s - %d]", o.base, o.value*-1)
 	}
 
 	return fmt.Sprintf("%s", o.base)
