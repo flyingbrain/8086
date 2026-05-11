@@ -11,21 +11,18 @@ type modOperand struct {
 
 type directOperand struct {
 	value int
-	size  uint8
 }
 
-type register struct {
-	reg  registerIndex
+type registerOperand struct {
+	reg  uint8
 	h    int8
 	size int8
 }
 
 type operand interface {
 	printOp() string
-}
-
-type operation struct {
-	value operand
+	getValue() uint16
+	writeValue(val uint16)
 }
 
 type commandType string
@@ -36,29 +33,26 @@ const (
 )
 
 type decodedCommand struct {
-	value   [2]operation
+	value   [2]operand
 	comType commandType
 	optcode string
 	amb     bool
 	w       bool
 }
 
-func getReg(b byte, w int) operation {
-	RegTable := [][2]register{
-		{{Register_a, 0, 1}, {Register_a, 0, 2}},
-		{{Register_c, 0, 1}, {Register_c, 0, 2}},
-		{{Register_d, 0, 1}, {Register_d, 0, 2}},
-		{{Register_b, 0, 1}, {Register_b, 0, 2}},
-		{{Register_a, 1, 1}, {Register_sp, 0, 2}},
-		{{Register_c, 1, 1}, {Register_bp, 0, 2}},
-		{{Register_d, 1, 1}, {Register_si, 0, 2}},
-		{{Register_b, 1, 1}, {Register_di, 0, 2}},
+func getReg(b byte, w int) operand {
+	RegTable := [][2]registerOperand{
+		{{0, 0, 1}, {0, 0, 2}},
+		{{1, 0, 1}, {1, 0, 2}},
+		{{2, 0, 1}, {2, 0, 2}},
+		{{3, 0, 1}, {3, 0, 2}},
+		{{0, 1, 1}, {4, 0, 2}},
+		{{1, 1, 1}, {5, 0, 2}},
+		{{2, 1, 1}, {6, 0, 2}},
+		{{3, 1, 1}, {7, 0, 2}},
 	}
 
-	rez := operation{}
-	rez.value = RegTable[int(b)][w]
-
-	return rez
+	return RegTable[int(b)][w]
 }
 
 func getModName(b byte) effectiveAddressBase {
@@ -152,7 +146,7 @@ func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) bool
 	}
 
 	command := decodedCommand{
-		value:   [2]operation{},
+		value:   [2]operand{},
 		comType: regul,
 		optcode: com.Name,
 		amb:     true,
@@ -201,9 +195,7 @@ func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) bool
 				value: dispData,
 			}
 
-			command.value[D] = operation{
-				value: operand,
-			}
+			command.value[D] = operand
 		}
 	} else if dispData != 0 {
 		operand := modOperand{
@@ -213,9 +205,7 @@ func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) bool
 
 		command.comType = jump
 
-		command.value[1] = operation{
-			value: operand,
-		}
+		command.value[1] = operand
 	}
 
 	// direct data
@@ -223,19 +213,14 @@ func readCommand(buf []byte, com Command, cmds *[]decodedCommand, pos *int) bool
 		data := parceDispl(buf, pos, hasData, !dataW)
 		dataOper := directOperand{
 			value: int(data),
-			size:  uint8(W),
 		}
 
-		op := operation{}
-
 		idx := 0
-		if command.value[0] != op {
+		if command.value[0] != nil {
 			idx = 1
 		}
 
-		op.value = dataOper
-
-		command.value[idx] = op
+		command.value[idx] = dataOper
 	}
 
 	*cmds = append(*cmds, command)

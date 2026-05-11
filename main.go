@@ -13,10 +13,10 @@ type registerIndex string
 const (
 	Register_none registerIndex = ""
 
-	Register_a     registerIndex = "a"
-	Register_b     registerIndex = "b"
-	Register_c     registerIndex = "c"
-	Register_d     registerIndex = "d"
+	Register_a     registerIndex = "ax"
+	Register_b     registerIndex = "bx"
+	Register_c     registerIndex = "cx"
+	Register_d     registerIndex = "dx"
 	Register_sp    registerIndex = "sp"
 	Register_bp    registerIndex = "bp"
 	Register_si    registerIndex = "si"
@@ -48,13 +48,21 @@ const (
 	EffectiveAddress_count effectiveAddressBase = "count"
 )
 
+var registerBuf [8]uint16
+
 func main() {
 	args := os.Args
 	if len(args) < 2 {
-		log.Fatal("Please set source the file")
+		log.Fatal("Please set the file source")
 	}
 
 	name := args[1]
+	run := false
+
+	if args[1] == "exec" {
+		run = true
+		name = args[2]
+	}
 
 	file, err := os.Open(name)
 	if err != nil {
@@ -67,80 +75,92 @@ func main() {
 
 	n, err := file.Read(buf)
 	if err == io.EOF {
-
+		fmt.Println("File fully read")
 	}
+
 	buf = buf[:n]
+	var execBuf strings.Builder
 
 	data, err := decode(buf)
+	if run {
+		exitCommand(data, &execBuf)
+	}
+
 	printCommand(data)
+	fmt.Print(execBuf.String())
 
 	if err != nil {
 		fmt.Println(err)
 	}
 }
 
-func printCommand(data []decodedCommand) {
-	fmt.Print("bits 16\n\n")
-	var str strings.Builder
+var regs = [8]registerIndex{
+	Register_a,
+	Register_b,
+	Register_c,
+	Register_d,
+	Register_sp,
+	Register_bp,
+	Register_si,
+	Register_di,
+}
 
-	for _, com := range data {
-
-		fmt.Fprintf(&str, "%s ", com.optcode)
-		if com.amb && com.comType != jump {
-			size := "byte"
-			if com.w {
-				size = "word"
-			}
-
-			fmt.Fprintf(&str, "%s ", size)
+func exitCommand(data []decodedCommand, buf *strings.Builder) {
+	fmt.Fprint(buf, "\n")
+	for _, op := range data {
+		switch op.optcode {
+		case "mov":
+			op.value[0].writeValue(op.value[1].getValue())
 		}
-
-		sep := ", "
-
-		for _, c := range com.value {
-			if c.value != nil {
-				fmt.Fprintf(&str, "%s%s", c.value.printOp(), sep)
-			}
-			sep = ""
-		}
-
-		str.WriteString("\n")
 	}
 
-	fmt.Print(str.String())
-}
-
-func (o modOperand) printOp() string {
-	if o.value != 0 {
-		if o.base == "" {
-			return fmt.Sprintf("[%d]", o.value)
-		}
-
-		if o.value > 0 {
-			return fmt.Sprintf("[%s + %d]", o.base, o.value)
-		}
-
-		return fmt.Sprintf("[%s - %d]", o.base, o.value*-1)
+	for n, reg := range registerBuf {
+		fmt.Fprintf(buf, "%s: 0x%04x (%d)\n", regs[n], reg, reg)
 	}
-
-	return fmt.Sprintf("%s", o.base)
 }
 
-func (o directOperand) printOp() string {
-	return fmt.Sprintf("%d", o.value)
-}
-
-func (o register) printOp() string {
-	c := ""
-	if o.size == 2 && len(o.reg) == 1 {
-		c = "x"
-	} else if o.size == 1 {
-		if o.h == 1 {
-			c = "h"
+func (o registerOperand) getValue() uint16 {
+	value := registerBuf[o.reg]
+	if o.size == 0 {
+		if o.h == 0 {
+			//low
+			value = value & 0x00FF
 		} else {
-			c = "l"
+			//high
+			value = (value >> 8) & 0xFF
 		}
 	}
 
-	return string(o.reg) + c
+	return value
+}
+
+func (o registerOperand) writeValue(val uint16) {
+	regValue := o.getValue()
+	if o.size == 0 {
+		if o.h == 0 {
+			//low
+			regValue = (regValue & 0xFF00) | val
+		} else {
+			//high
+			regValue = (regValue & 0x00FF) | (val << 8)
+		}
+	} else {
+		regValue = val
+	}
+
+	registerBuf[o.reg] = regValue
+}
+
+func (o directOperand) getValue() uint16 {
+	return uint16(o.value)
+}
+func (o directOperand) writeValue(val uint16) {
+	fmt.Print(val)
+}
+
+func (o modOperand) getValue() uint16 {
+	return uint16(o.value)
+}
+func (o modOperand) writeValue(val uint16) {
+	fmt.Print(val)
 }
