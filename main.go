@@ -50,6 +50,20 @@ const (
 
 var registerBuf [8]uint16
 
+var regs = [8]registerIndex{
+	Register_a,
+	Register_b,
+	Register_c,
+	Register_d,
+	Register_sp,
+	Register_bp,
+	Register_si,
+	Register_di,
+}
+
+var zeroFlag bool
+var signedFlag bool
+
 func main() {
 	args := os.Args
 	if len(args) < 2 {
@@ -79,43 +93,140 @@ func main() {
 	}
 
 	buf = buf[:n]
-	var execBuf strings.Builder
+	var strBuf strings.Builder
+	fmt.Fprint(&strBuf, "bits 16\n\n")
 
 	data, err := decode(buf)
-	if run {
-		exitCommand(data, &execBuf)
+
+	for _, com := range data {
+		printCommand(com, &strBuf)
+
+		if run {
+			exitCommand(com, &strBuf)
+		}
+
+		fmt.Fprint(&strBuf, "\n")
 	}
 
-	printCommand(data)
-	fmt.Print(execBuf.String())
+	if run {
+		fmt.Fprint(&strBuf, "\n")
+		fmt.Fprint(&strBuf, "Final registers:\n")
+		for n, reg := range registerBuf {
+			if reg != 0 {
+				fmt.Fprintf(&strBuf, "    %s: 0x%04x (%d)\n", regs[n], reg, reg)
+			}
+		}
+		flags := ""
+		if zeroFlag {
+			flags += "Z"
+		}
+		if signedFlag {
+			flags += "S"
+		}
+
+		if len(flags) > 0 {
+			fmt.Fprintf(&strBuf, "  flags: %s", flags)
+		}
+	}
+
+	fmt.Print(strBuf.String())
 
 	if err != nil {
 		fmt.Println(err)
 	}
 }
 
-var regs = [8]registerIndex{
-	Register_a,
-	Register_b,
-	Register_c,
-	Register_d,
-	Register_sp,
-	Register_bp,
-	Register_si,
-	Register_di,
+func exitCommand(com decodedCommand, str *strings.Builder) {
+	com.value[0].exec(com.optcode, com.value[1], str)
 }
 
-func exitCommand(data []decodedCommand, buf *strings.Builder) {
-	fmt.Fprint(buf, "\n")
-	for _, op := range data {
-		switch op.optcode {
-		case "mov":
-			op.value[0].writeValue(op.value[1].getValue())
+func (o registerOperand) writeValue(val uint16) {
+	regValue := registerBuf[o.reg]
+	if o.size == 0 {
+		if o.h == 0 {
+			//low
+			regValue = (regValue & 0xFF00) | val
+		} else {
+			//high
+			regValue = (regValue & 0x00FF) | (val << 8)
 		}
+	} else {
+		regValue = val
 	}
 
-	for n, reg := range registerBuf {
-		fmt.Fprintf(buf, "%s: 0x%04x (%d)\n", regs[n], reg, reg)
+	registerBuf[o.reg] = regValue
+}
+
+func (o registerOperand) movValue(s operand, str *strings.Builder) {
+	value := registerBuf[o.reg]
+	val := s.getValue()
+	o.writeValue(val)
+
+	fmt.Fprintf(str, " ; %s:0x%x->0x%x", regs[o.reg], value, val)
+}
+
+func (o registerOperand) subValue(s operand, str *strings.Builder) {
+	value := registerBuf[o.reg]
+	val := value - s.getValue()
+	o.writeValue(val)
+
+	fmt.Fprintf(str, " ; %s:0x%x->0x%x", regs[o.reg], value, val)
+	checkFlags(val, str)
+}
+
+func (o registerOperand) cmpValue(s operand, str *strings.Builder) {
+	value := registerBuf[o.reg]
+	val := value - s.getValue()
+
+	fmt.Fprintf(str, " ; %s:0x%x->0x%x", regs[o.reg], value, val)
+	checkFlags(val, str)
+}
+
+func (o registerOperand) addValue(s operand, str *strings.Builder) {
+	value := registerBuf[o.reg]
+	val := value + s.getValue()
+	o.writeValue(val)
+
+	fmt.Fprintf(str, " ; %s:0x%x->0x%x", regs[o.reg], value, val)
+	checkFlags(val, str)
+}
+
+func checkFlags(v uint16, str *strings.Builder) {
+	on := ""
+	off := ""
+	if v == 0 && !zeroFlag {
+		zeroFlag = true
+		on += "Z"
+	} else if v != 0 && zeroFlag {
+		zeroFlag = false
+		off += "Z"
+	}
+
+	isSigned := v&0x8000 == 0x8000
+
+	if isSigned && !signedFlag {
+		signedFlag = true
+		on += "S"
+	} else if !isSigned && signedFlag {
+		signedFlag = false
+		off += "S"
+	}
+
+	if len(on) > 0 || len(off) > 0 {
+		fmt.Fprintf(str, " flags:%s->%s", off, on)
+	}
+}
+
+func (o registerOperand) exec(optcode string, s operand, str *strings.Builder) {
+	switch optcode {
+	case "mov":
+		o.movValue(s, str)
+	case "sub":
+		o.subValue(s, str)
+	case "cmp":
+		o.cmpValue(s, str)
+	case "add":
+		o.addValue(s, str)
 	}
 }
 
@@ -134,33 +245,14 @@ func (o registerOperand) getValue() uint16 {
 	return value
 }
 
-func (o registerOperand) writeValue(val uint16) {
-	regValue := o.getValue()
-	if o.size == 0 {
-		if o.h == 0 {
-			//low
-			regValue = (regValue & 0xFF00) | val
-		} else {
-			//high
-			regValue = (regValue & 0x00FF) | (val << 8)
-		}
-	} else {
-		regValue = val
-	}
-
-	registerBuf[o.reg] = regValue
+func (o directOperand) exec(optcode string, s operand, str *strings.Builder) {
+	log.Fatal("can not execute operation from direct value")
 }
-
 func (o directOperand) getValue() uint16 {
 	return uint16(o.value)
 }
-func (o directOperand) writeValue(val uint16) {
-	fmt.Print(val)
+func (o modOperand) exec(optcode string, s operand, str *strings.Builder) {
 }
-
 func (o modOperand) getValue() uint16 {
 	return uint16(o.value)
-}
-func (o modOperand) writeValue(val uint16) {
-	fmt.Print(val)
 }

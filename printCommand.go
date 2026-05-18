@@ -5,35 +5,26 @@ import (
 	"strings"
 )
 
-func printCommand(data []decodedCommand) {
-	fmt.Print("bits 16\n\n")
-	var str strings.Builder
+func printCommand(com decodedCommand, str *strings.Builder) {
 
-	for _, com := range data {
-
-		fmt.Fprintf(&str, "%s ", com.optcode)
-		if com.amb && com.comType != jump {
-			size := "byte"
-			if com.w {
-				size = "word"
-			}
-
-			fmt.Fprintf(&str, "%s ", size)
+	fmt.Fprintf(str, "%s ", com.optcode)
+	if com.amb && com.comType != jump {
+		size := "byte"
+		if com.w {
+			size = "word"
 		}
 
-		sep := ", "
-
-		for _, o := range com.value {
-			if o != nil {
-				fmt.Fprintf(&str, "%s%s", o.printOp(), sep)
-			}
-			sep = ""
-		}
-
-		str.WriteString("\n")
+		fmt.Fprintf(str, "%s ", size)
 	}
 
-	fmt.Print(str.String())
+	sep := ", "
+
+	for _, o := range com.value {
+		if o != nil {
+			fmt.Fprintf(str, "%s%s", o.printOp(), sep)
+		}
+		sep = ""
+	}
 }
 
 func (o modOperand) printOp() string {

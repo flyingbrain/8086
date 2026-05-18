@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 )
 
 type modOperand struct {
@@ -22,7 +23,7 @@ type registerOperand struct {
 type operand interface {
 	printOp() string
 	getValue() uint16
-	writeValue(val uint16)
+	exec(opcode string, s operand, str *strings.Builder)
 }
 
 type commandType string
